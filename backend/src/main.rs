@@ -1,3 +1,6 @@
+use std::time::Instant;
+
+static START: Instant = Instant::now();
 static PROGRAM: &str = r#"import axiod from "https://deno.land/x/axiod/mod.ts";
 
 const api_base = "https://api.cloudflare.com/client/v4";
@@ -74,12 +77,17 @@ try {
 "#;
 
 fn main() {
-    println!("Hello, world!");
+    let source = create_function("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".into(), "laspruca.nz".into(), "devtron.laspruca.nz".into());
+    println!("{}", source);
 }
 
 fn create_function(cf_token: String, cf_zone: String, cf_domain: String) -> String {
-    format!(
-        "const CF_TOKEN = {};\nconst CF_ZONE = {};\nconst CF_DOMAIN = {};\n{}",
+    let source = format!(
+        "const CF_TOKEN = \"{}\";\nconst CF_ZONE = \"{}\";\nconst CF_DOMAIN = \"{}\";\n{}",
         cf_token, cf_zone, cf_domain, PROGRAM
-    )
+    );
+
+    let filename = format!("i-{}", std::time::Instant::now());
+
+    std::fs::write("o-{")
 }

@@ -10,16 +10,6 @@
 	};
 
 	const formData: Writable<MainForm> = writable(new MainForm());
-
-	let formValid: boolean = false;
-
-	const unsubscribe = formData.subscribe((data) => {
-		formValid = data.isValid();
-	});
-
-	onDestroy(() => {
-		unsubscribe();
-	});
 </script>
 
 <div class="top">
@@ -131,7 +121,8 @@
 </div>
 
 <div class="submit--wrapper">
-	<Button class="submit" disabled={!formValid} on:click={setupUpdate}>Setup update</Button>
+	<Button class="submit" disabled={!$formData.isValid()} on:click={setupUpdate}>Setup update</Button
+	>
 </div>
 
 <style>

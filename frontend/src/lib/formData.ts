@@ -11,6 +11,7 @@ export enum AuthMethod {
   Key,
 }
 
+/** A class to wrap all of the information in the main form */
 export default class MainForm {
   // Cloudflare information
   public cfToken: Validated<string>;
@@ -42,7 +43,9 @@ export default class MainForm {
     this.sshAuthMethod = AuthMethod.Password;
   }
 
+  /** Checks the validity of all the fields in the form */
   public isValid(): boolean {
+    // Check the validity of all of the main fields
     const validity = [
       this.cfToken,
       this.cfEmail,
@@ -52,19 +55,28 @@ export default class MainForm {
       this.sshPort,
       this.sshUsername,
     ].map((f) => f.isValid());
+
     if (this.sshAuthMethod == AuthMethod.Password) {
+      // If using password authentication, check that the password is valid
       return validity && this.sshPassword.isValid();
     } else {
+      // If using RSA Key authentication, check that the key is valid
       return validity && this.sshRsaKey.isValid();
     }
   }
 
+  /** Unwraps all Validated objects and returns the value */
   public toJson(): string {
-    let d = {};
+    // Create a temporary variable to store all the fields of the object
+    const d = {};
     for (const [k, v] of Object.entries(this)) {
+      // If item is a Validated, add the value to the object
       if (v instanceof Validated) d[k] = v.value;
+      // If the item is not a Validated, directly add it to the object
       else d[k] = v;
     }
+
+    // Convert it to a json object
     return JSON.stringify(d);
   }
 }

@@ -3,6 +3,7 @@ mod error;
 use error::*;
 
 use std::{
+    fmt::format,
     fs::remove_file,
     io::{Read, Write},
     net::TcpStream,
@@ -11,7 +12,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ssh2::Session;
+use ssh2::{ExitSignal, Session};
 
 static PROGRAM: &str = include_str!("main.go");
 
@@ -36,9 +37,9 @@ fn main() {
 
     upload_program(
         compiled_path.clone(),
-        "".into(),
-        22,
-        "".into(),
+        "dev.qrl.nz".into(),
+        420,
+        "fourtwenty".into(),
         Some("".into()),
         None,
     )
@@ -52,11 +53,12 @@ fn create_source_file(
     cf_token: String,
     cf_zone: String,
     cf_domain: String,
+    cf_email: String,
 ) -> Result<String, Error> {
     let source = PROGRAM
         .replace("@token", &cf_token)
         .replace("@zone", &cf_zone)
-        .replace("@domain", &cf_domain)
+        .replace("@email", &cf_email)
         .replace("@dns", &cf_domain);
 
     let filename = format!(
@@ -156,33 +158,55 @@ fn upload_program(
     }
 
     upload_file(&filename, &sess)?;
-
-    let mut channel = ssh_err!(sess.channel_session(), "Error creating ssh channel");
-    ssh_err!(
-        channel.exec(&format!("chmod +x {}", &filename)),
-        "Error running chmod"
-    );
-
-    ssh_err!(
-        channel.exec("crontab -l > mycrontab"),
-        "Error running crontab -l"
-    );
-
-    ssh_err!(
-        channel.exec(&format!("echo \"@reboot ~/{}\" >> mycrontab", &filename)),
-        "Error running echo"
-    );
-
-    ssh_err!(
-        channel.exec("crontab mycrontab"),
-        "Error installing new crontab"
-    );
-
-    ssh_err!(channel.exec("rm mycrontab"), "Error removing temp crontab");
-
-    channel.wait_close();
-    println!("{}", channel.exit_status().unwrap());
+    // Make file executable
+    // $ chmod +x <FILE>
+    run_command(&format!("chmod +x {}", &filename), &sess)?;
+    // Save current crontab into a temp file
+    // $ crontab -l > mycrontab
+    run_command("crontab -l > mycrontab", &sess)?;
+    // Add the line to run cf-update on reboot to crontab
+    // $ echo "@reboot <FILE>" >> mycrontab
+    run_command(
+        &format!("echo \"@reboot ~/{}\" >> mycrontab", &filename),
+        &sess,
+    )?;
+    // Install the temp crontab
+    // $ crontab mycrontab
+    run_command("crontab mycrontab", &sess)?;
+    // Remove the temporary crontab
+    // $ rm mycrontab
+    run_command("rm mycrontab", &sess)?;
     Ok(())
+}
+
+fn run_command(command: &str, sess: &Session) -> Result<String, Error> {
+    let mut channel = ssh_err!(sess.channel_session(), "Error creating SSH Channel");
+    ssh_err!(
+        channel.exec(command),
+        format!("Error running command {}", command)
+    );
+    let mut s = String::new();
+    ssh_err!(
+        channel.read_to_string(&mut s),
+        format!("Error running command {}", command)
+    );
+    ssh_err!(
+        channel.wait_close(),
+        format!("Error running command, {}", &command)
+    );
+    let exit = ssh_err!(
+        channel.exit_status(),
+        format!("Error running command {}", command)
+    );
+
+    if exit != 0 {
+        return Err(Error::new(
+            ErrorKind::SSHError,
+            "Command finished with non-zero exit code".into(),
+        ));
+    }
+
+    Ok(s)
 }
 
 fn upload_file(filename: &str, sess: &Session) -> Result<(), Error> {

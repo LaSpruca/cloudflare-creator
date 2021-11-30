@@ -1,6 +1,5 @@
 <script lang="ts">
 	import MainForm, { AuthMethod } from '$lib/formData';
-	import { onDestroy } from 'svelte';
 	import { get, Writable, writable } from 'svelte/store';
 	import { Button, FormGroup, Input, InputGroup, InputGroupText } from 'sveltestrap';
 

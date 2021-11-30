@@ -1,74 +1,12 @@
 <script lang="ts">
-	import {
-		domainValidator,
-		emailValidator,
-		nonEmptyValidator,
-		serverAddressValidator,
-		Validated
-	} from '$lib/validators';
-
+	import MainForm, { AuthMethod } from '$lib/formData';
 	import { onDestroy } from 'svelte';
-	import { validate_each_argument } from 'svelte/internal';
-
-	import { Writable, writable } from 'svelte/store';
+	import { get, Writable, writable } from 'svelte/store';
 	import { Button, FormGroup, Input, InputGroup, InputGroupText } from 'sveltestrap';
-
-	enum AuthMethod {
-		Password,
-		Key
-	}
-
-	class MainForm {
-		// Cloudflare information
-		public cfToken: Validated<string>;
-		public cfEmail: Validated<string>;
-		public cfZone: Validated<string>;
-		public cfDns: Validated<string>;
-
-		// SSH Server information
-		public sshAddress: Validated<string>;
-		public sshPort: Validated<number>;
-		public sshUsername: Validated<string>;
-		public sshAuthMethod: AuthMethod;
-		public sshRsaKey: Validated<string>;
-		public sshPassword: Validated<string>;
-
-		constructor() {
-			// Cloudflare information
-			this.cfToken = new Validated('', nonEmptyValidator);
-			this.cfEmail = new Validated('', emailValidator);
-			this.cfZone = new Validated('', domainValidator);
-			this.cfDns = new Validated('', domainValidator);
-
-			// SSH Server information
-			this.sshAddress = new Validated('', serverAddressValidator);
-			this.sshPort = new Validated(22, nonEmptyValidator);
-			this.sshUsername = new Validated('', nonEmptyValidator);
-			this.sshRsaKey = new Validated('', nonEmptyValidator);
-			this.sshPassword = new Validated('', nonEmptyValidator);
-			this.sshAuthMethod = AuthMethod.Password;
-		}
-
-		public isValid(): boolean {
-			let validity = [
-				this.cfToken,
-				this.cfEmail,
-				this.cfZone,
-				this.cfDns,
-				this.sshAddress,
-				this.sshPort,
-				this.sshUsername
-			].map((f) => f.isValid());
-			if (this.sshAuthMethod == AuthMethod.Password) {
-				return validity && this.sshPassword.isValid();
-			} else {
-				return validity && this.sshRsaKey.isValid();
-			}
-		}
-	}
 
 	const setupUpdate = () => {
 		console.log('Uploading Script');
+		console.log(JSON.stringify(get(formData)));
 	};
 
 	const formData: Writable<MainForm> = writable(new MainForm());
@@ -77,7 +15,6 @@
 
 	const unsubscribe = formData.subscribe((data) => {
 		formValid = data.isValid();
-		console.log(data);
 	});
 
 	onDestroy(() => {

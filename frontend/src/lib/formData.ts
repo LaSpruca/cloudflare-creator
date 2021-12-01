@@ -76,6 +76,12 @@ export default class MainForm {
       else d[k] = v;
     }
 
+    if (this.sshAuthMethod == AuthMethod.Key) {
+      d["sshPassword"] = null;
+    } else {
+      d["sshRsaKey"] = null;
+    }
+
     // Convert it to a json object
     return JSON.stringify(d);
   }

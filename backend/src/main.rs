@@ -1,250 +1,188 @@
-mod error;
-
-use error::*;
+mod cf_check;
+mod create_binary;
+pub mod error;
+mod ssh;
 
 use std::{
-    fmt::format,
-    fs::remove_file,
-    io::{Read, Write},
-    net::TcpStream,
-    path::Path,
-    process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    collections::{hash_map::Entry, HashMap},
+    sync::{Arc, Mutex},
 };
 
-use ssh2::{ExitSignal, Session};
+use actix_rt::time::Instant;
+use actix_web::{get, post, web, App, HttpResponse, HttpServer};
+use create_binary::{compile_source, create_source_file};
+use error::Error;
+use serde::{Deserialize, Serialize};
+use ssh::{create_cron_job, create_session, upload_file};
 
-static PROGRAM: &str = include_str!("main.go");
+use crate::cf_check::check_cf;
 
-macro_rules! ssh_err {
-    ($stmt:expr,$msg:expr) => {
-        match $stmt {
-            Ok(a) => a,
-            Err(e) => return { Err(Error::new(ErrorKind::SSHError, format!("{} {}", $msg, e))) },
-        }
-    };
+#[derive(Serialize, Clone)]
+enum JobStatus {
+    Submitted,
+    CheckingToken,
+    BuildingScript,
+    Uploading,
+    CreatingCronJob,
+    Done(String),
+    Error(Error),
 }
 
-fn main() {
-    let source_file_path = create_source_file(
-        "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".into(),
-        "laspruca.nz".into(),
-        "devtron.laspruca.nz".into(),
-    )
-    .unwrap();
-
-    let compiled_path = compile_source(source_file_path.clone()).unwrap();
-
-    upload_program(
-        compiled_path.clone(),
-        "dev.qrl.nz".into(),
-        420,
-        "fourtwenty".into(),
-        Some("".into()),
-        None,
-    )
-    .unwrap();
-
-    remove_file(&source_file_path).unwrap();
-    remove_file(&compiled_path).unwrap();
-}
-
-fn create_source_file(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateJobRequest {
     cf_token: String,
-    cf_zone: String,
-    cf_domain: String,
     cf_email: String,
-) -> Result<String, Error> {
-    let source = PROGRAM
-        .replace("@token", &cf_token)
-        .replace("@zone", &cf_zone)
-        .replace("@email", &cf_email)
-        .replace("@dns", &cf_domain);
+    cf_zone: String,
+    cf_dns: String,
 
-    let filename = format!(
-        "i-{}.go",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros()
-    );
-
-    match std::fs::write(&filename, source.as_bytes()) {
-        Ok(_) => {}
-        Err(err) => {
-            return Err(Error::new(
-                ErrorKind::IOError,
-                format!("Error writing to source file {}", err),
-            ))
-        }
-    };
-    Ok(filename)
+    ssh_address: String,
+    ssh_port: usize,
+    ssh_username: String,
+    ssh_ras_key: Option<String>,
+    ssh_password: Option<String>,
 }
 
-fn compile_source(path: String) -> Result<String, Error> {
-    let output_path = format!(
-        "cf-update-{}",
-        path.strip_prefix("i-")
-            .unwrap()
-            .strip_suffix(".go")
-            .unwrap()
-    );
-    let mut cmd = Command::new("go")
-        .arg("build")
-        .arg("-ldflags")
-        .arg("-s -w")
-        .arg("-o")
-        .arg(output_path.as_str())
-        .arg(path.as_str())
-        .spawn()
-        .unwrap();
+#[derive(Serialize)]
+struct CreateJobResponse {
+    id: u128,
+}
 
-    let output = match cmd.wait() {
-        Ok(a) => a,
-        Err(err) => {
-            return Err(Error::new(
-                ErrorKind::CompilerError,
-                format!("Compile command failed {}", err),
-            ))
+#[derive(Serialize)]
+struct JobStatusResponse {
+    status: JobStatus,
+}
+
+type JobStatusMap = HashMap<u128, Arc<Mutex<JobStatus>>>;
+
+#[get("/status/{id}")]
+fn job_status(id: web::Path<u128>, data: web::Data<Mutex<JobStatusMap>>) -> HttpResponse {
+    let mut data_lock = data.lock().unwrap();
+    let mut remove = false;
+    let response = match data_lock.entry(*id) {
+        Entry::Occupied(status) => {
+            let status = status.get().lock().unwrap();
+
+            let response = JobStatusResponse {
+                status: (*status).clone(),
+            };
+
+            match *status {
+                JobStatus::Done(_) | JobStatus::Error(_) => remove = true,
+                _ => {}
+            }
+
+            HttpResponse::Ok().body(serde_json::to_string(&response).unwrap())
         }
+        Entry::Vacant(_) => HttpResponse::NotFound()
+            .body(&format!("{{\'error\': \'No job with id {} exists\'}}", id)),
     };
 
-    if !output.success() {
-        match remove_file(&path) {
+    if remove {
+        data_lock.remove_entry(&*id);
+    }
+
+    response
+}
+
+#[post("/create-job")]
+fn create_job(
+    payload: web::Json<CreateJobRequest>,
+    data: web::Data<Mutex<JobStatusMap>>,
+    start: web::Data<Instant>,
+) -> HttpResponse {
+    let job_id = Instant::now().duration_since(**start);
+    let status = Arc::new(Mutex::new(JobStatus::Submitted));
+    let mut data_lock = data.lock().unwrap();
+    data_lock.insert(job_id.as_millis(), status.clone());
+    actix_rt::spawn(async move {
+        *status.lock().unwrap() = JobStatus::CheckingToken;
+
+        match check_cf(&payload.cf_token, &payload.cf_email, &payload.cf_zone).await {
             Ok(_) => {}
-            Err(err) => {
-                return Err(Error::new(ErrorKind::IOErrorNonFatal, format!("{}", err)));
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
+            }
+        };
+
+        *status.lock().unwrap() = JobStatus::BuildingScript;
+
+        let filename = match create_source_file(
+            payload.cf_token.clone(),
+            payload.cf_zone.clone(),
+            payload.cf_dns.clone(),
+            payload.cf_email.clone(),
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
+            }
+        };
+
+        let compiled = match compile_source(&filename) {
+            Ok(a) => a,
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
+            }
+        };
+
+        *status.lock().unwrap() = JobStatus::Uploading;
+
+        let sess = match create_session(
+            payload.ssh_address.clone(),
+            payload.ssh_port.clone(),
+            payload.ssh_username.clone(),
+            payload.ssh_password.clone(),
+            payload.ssh_ras_key.clone(),
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
+            }
+        };
+
+        match upload_file(&compiled, &sess) {
+            Ok(a) => a,
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
+            }
+        };
+
+        *status.lock().unwrap() = JobStatus::CreatingCronJob;
+
+        match create_cron_job(&filename, &sess) {
+            Ok(a) => a,
+            Err(e) => {
+                *status.lock().unwrap() = JobStatus::Error(e);
+                return;
             }
         }
 
-        return Err(Error::new(
-            ErrorKind::CompilerError,
-            "Compilation exited with non-zero exit code".into(),
-        ));
+        *status.lock().unwrap() = JobStatus::Done(filename);
+    });
+    let response = CreateJobResponse {
+        id: job_id.as_millis(),
     };
-
-    Ok(output_path)
+    HttpResponse::Ok().body(serde_json::to_string(&response).unwrap())
 }
 
-#[allow(dead_code)]
-fn upload_program(
-    filename: String,
-    host: String,
-    port: usize,
-    username: String,
-
-    password: Option<String>,
-    key: Option<String>,
-) -> Result<(), Error> {
-    // Make a TCP connection to the server
-    let tcp_stream = TcpStream::connect(format!("{}:{}", &host, port)).unwrap();
-
-    // Start a new SSH session
-    let mut sess = ssh_err!(Session::new(), "Unable to create SSH session");
-    sess.set_tcp_stream(tcp_stream);
-    ssh_err!(sess.handshake(), "Unable to make ssh handshake");
-
-    // Authenticate
-    if let Some(pass) = password {
-        ssh_err!(
-            sess.userauth_password(&username, &pass),
-            "Unable to authenticate with username/password"
-        );
-    } else if let Some(key) = key {
-        ssh_err!(
-            sess.userauth_pubkey_memory(&username, None, &key, None),
-            "Unable to authenticate with pubkey"
-        );
-    }
-
-    upload_file(&filename, &sess)?;
-    // Make file executable
-    // $ chmod +x <FILE>
-    run_command(&format!("chmod +x {}", &filename), &sess)?;
-    // Save current crontab into a temp file
-    // $ crontab -l > mycrontab
-    run_command("crontab -l > mycrontab", &sess)?;
-    // Add the line to run cf-update on reboot to crontab
-    // $ echo "@reboot <FILE>" >> mycrontab
-    run_command(
-        &format!("echo \"@reboot ~/{}\" >> mycrontab", &filename),
-        &sess,
-    )?;
-    // Install the temp crontab
-    // $ crontab mycrontab
-    run_command("crontab mycrontab", &sess)?;
-    // Remove the temporary crontab
-    // $ rm mycrontab
-    run_command("rm mycrontab", &sess)?;
-    Ok(())
-}
-
-fn run_command(command: &str, sess: &Session) -> Result<String, Error> {
-    let mut channel = ssh_err!(sess.channel_session(), "Error creating SSH Channel");
-    ssh_err!(
-        channel.exec(command),
-        format!("Error running command {}", command)
-    );
-    let mut s = String::new();
-    ssh_err!(
-        channel.read_to_string(&mut s),
-        format!("Error running command {}", command)
-    );
-    ssh_err!(
-        channel.wait_close(),
-        format!("Error running command, {}", &command)
-    );
-    let exit = ssh_err!(
-        channel.exit_status(),
-        format!("Error running command {}", command)
-    );
-
-    if exit != 0 {
-        return Err(Error::new(
-            ErrorKind::SSHError,
-            "Command finished with non-zero exit code".into(),
-        ));
-    }
-
-    Ok(s)
-}
-
-fn upload_file(filename: &str, sess: &Session) -> Result<(), Error> {
-    // Read the compiled script into memory
-    let mut bin_file = match std::fs::File::open(&filename) {
-        Ok(x) => x,
-        Err(e) => {
-            return Err(Error::new(
-                ErrorKind::IOError,
-                format!("Unable to open binary file {}", e),
-            ))
-        }
-    };
-
-    let mut bin = vec![];
-
-    match bin_file.read_to_end(&mut bin) {
-        Ok(_) => {}
-        Err(e) => {
-            return Err(Error::new(
-                ErrorKind::IOError,
-                format!("Could not read binary file, {}", e),
-            ))
-        }
-    };
-
-    // Upload the binary file
-    let mut remote_file = ssh_err!(
-        sess.scp_send(Path::new(&filename), 0o644, bin.len() as u64 * 8, None),
-        "Failed to create file on server"
-    );
-
-    ssh_err!(remote_file.write_all(&bin), "Unable to write binary file");
-    // Close the channel and wait for the whole content to be tranferred
-    ssh_err!(remote_file.send_eof(), "Unable to write binary file");
-    ssh_err!(remote_file.wait_eof(), "Error sending to remote");
-    ssh_err!(remote_file.close(), "Error closing remote file");
-    ssh_err!(remote_file.wait_close(), "Error closing remote file");
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    HttpServer::new(|| {
+        App::new()
+            .service(job_status)
+            .service(create_job)
+            .data(Mutex::new(JobStatusMap::new()))
+            .data(Instant::now())
+    })
+    .bind("0.0.0.0:8080")?
+    .run()
+    .await?;
 
     Ok(())
 }

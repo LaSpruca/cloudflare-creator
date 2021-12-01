@@ -1,14 +1,17 @@
 use std::fmt::Display;
 
-#[derive(Debug)]
+use serde::Serialize;
+
+#[derive(Debug, Serialize, Clone)]
 pub enum ErrorKind {
     IOError,
     IOErrorNonFatal,
     CompilerError,
     SSHError,
+    CfError,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Error {
     pub kind: ErrorKind,
     pub message: String,
@@ -30,6 +33,7 @@ impl Display for Error {
                 ErrorKind::CompilerError => "Error during script compilation",
                 ErrorKind::SSHError => "Error during SSH",
                 ErrorKind::IOErrorNonFatal => "Non fatal error during IO operation",
+                ErrorKind::CfError => "Error validating Cloudflare information",
             },
             self.message
         )

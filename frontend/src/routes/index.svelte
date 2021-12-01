@@ -1,14 +1,23 @@
 <script lang="ts">
-	import MainForm, { AuthMethod } from '$lib/formData';
-	import { get, Writable, writable } from 'svelte/store';
+	import { formData, jobId } from '$lib/stores';
+	import { AuthMethod } from '$lib/formData';
+	import { get } from 'svelte/store';
 	import { Button, FormGroup, Input, InputGroup, InputGroupText } from 'sveltestrap';
+	import { goto } from '$app/navigation';
 
-	const setupUpdate = () => {
-		console.log('Uploading Script');
-		console.log(JSON.stringify(get(formData)));
+	const setupUpdate = async () => {
+		const form = get(formData);
+		const response = await fetch(import.meta.env.VITE_API_URL + 'create-job', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: form.toJson()
+		});
+		const responseJson = await response.json();
+		jobId.set(responseJson['id']);
+		goto('/status');
 	};
-
-	const formData: Writable<MainForm> = writable(new MainForm());
 </script>
 
 <div class="top">
@@ -104,6 +113,7 @@
 				placeholder="ThisIsNotYourPassword"
 				bind:value={$formData.sshPassword.value}
 				valid={$formData.sshPassword.isValid()}
+				type="password"
 			/>
 		</InputGroup>
 	{:else}

@@ -69,18 +69,15 @@ pub fn compile_source(path: &str) -> Result<String, Error> {
     };
 
     if !output.success() {
-        match remove_file(&path) {
-            Ok(_) => {}
-            Err(err) => {
-                return Err(Error::new(ErrorKind::IOErrorNonFatal, format!("{}", err)));
-            }
-        }
+        remove_file(&path).unwrap_or(());
 
         return Err(Error::new(
             ErrorKind::CompilerError,
             "Compilation exited with non-zero exit code".into(),
         ));
     };
+
+    remove_file(&path).unwrap_or(());
 
     Ok(output_path)
 }

@@ -21,7 +21,6 @@ pub fn create_session(
     host: String,
     port: usize,
     username: String,
-
     password: Option<String>,
     key: Option<String>,
 ) -> Result<Session, Error> {
@@ -52,7 +51,16 @@ pub fn create_cron_job(filename: &str, sess: &Session) -> Result<(), Error> {
     run_command(&format!("chmod +x {}", &filename), &sess)?;
     // Save current crontab into a temp file
     // $ crontab -l > mycrontab
-    run_command("crontab -l > mycrontab", &sess)?;
+    match run_command("crontab -l > mycrontab", &sess) {
+        Ok(_) => {}
+        Err(e) => {
+            if e.message.ends_with("non-zero exit code") {
+                run_command("touch mycrontab", &sess)?;
+            } else {
+                return Err(e);
+            }
+        }
+    };
     // Add the line to run cf-update on reboot to crontab
     // $ echo "@reboot <FILE>" >> mycrontab
     run_command(
@@ -97,7 +105,7 @@ fn run_command(command: &str, sess: &Session) -> Result<String, Error> {
     if exit != 0 {
         return Err(Error::new(
             ErrorKind::SSHError,
-            "Command finished with non-zero exit code".into(),
+            format!("Command '{}' finished with non-zero exit code", command),
         ));
     }
 
@@ -113,7 +121,7 @@ pub fn upload_file(filename: &str, sess: &Session) -> Result<(), Error> {
             return Err(Error::new(
                 ErrorKind::IOError,
                 format!("Unable to open binary file {}", e),
-            ))
+            ));
         }
     };
 
@@ -125,7 +133,7 @@ pub fn upload_file(filename: &str, sess: &Session) -> Result<(), Error> {
             return Err(Error::new(
                 ErrorKind::IOError,
                 format!("Could not read binary file, {}", e),
-            ))
+            ));
         }
     };
 

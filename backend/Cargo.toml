@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ssh2 = "*"
-actix-web = { version = "*", features = ["openssl"] }
-serde = "*"
-serde_json = "*"
+ssh2 = "0.9.3"
+actix-web = { version = "3.3.2", features = ["openssl"] }
+serde = "1.0.130"
+serde_json = "1.0.72"
 actix-rt = "1.1.1"
+actix-cors = "0.5.4"
+log4rs = "1.0.0"
+log = "*"

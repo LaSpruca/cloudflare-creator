@@ -1,5 +1,5 @@
 use crate::error::{Error, ErrorKind};
-use actix_web::{client::ClientBuilder, http::Method};
+use actix_web::{client::Client, http::Method};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -36,7 +36,7 @@ struct CfZones {
 const API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
 pub async fn check_cf(token: &str, email: &str, zone: &str) -> Result<(), Error> {
-    let client = ClientBuilder::default().finish();
+    let client = Client::default();
 
     let mut request = match client
         .request(Method::GET, &format!("{}/zones", API_BASE))

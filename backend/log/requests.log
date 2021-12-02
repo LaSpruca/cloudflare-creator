@@ -2744,3 +2744,4 @@
 2021-12-01T23:12:26.152271791+13:00 - Got data_lock
 2021-12-01T23:12:26.152383992+13:00 - Get status lock
 2021-12-01T23:12:26.152669209+13:00 - 127.0.0.1:56352 "GET /status/13495 HTTP/1.1" 200 48 "http://localhost:3000/" "Mozilla/5.0 (X11; Fedora; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36" 0.000879
+2021-12-01T23:41:09.668263391+13:00 - SIGINT received, exiting
